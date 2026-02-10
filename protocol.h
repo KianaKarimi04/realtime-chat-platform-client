@@ -5,10 +5,16 @@
 #ifndef PROTOCOL_H
 #define PROTOCOL_H
 
+#include <stddef.h>
+
 typedef enum {
     SERVER_ACK,
     SERVER_NACK
 } ServerResponse;
+
+int discover_server(void);
+const char *get_server_ip(void);
+int get_server_port(void);
 
 ServerResponse protocol_create_account(const char *username, const char *password);
 ServerResponse protocol_login(const char *username, const char *password);
