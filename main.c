@@ -5,6 +5,7 @@
 #include <ncurses.h>
 #include "ui.h"
 #include "auth.h"
+#include "protocol.h"
 
 int main() {
     ClientState state = {0, ""};

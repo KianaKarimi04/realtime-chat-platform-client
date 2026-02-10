@@ -1,35 +1,69 @@
+#include <stdint.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include "protocol.h"
 #include "network.h"
-#include <stdio.h>
-#include <string.h>
+#include "protocol_internal.h"
 
 /* Discovered server info */
-static char server_ip[64] = "";
-static int server_port = 0;
+static char server_ip[64];
+static uint8_t server_id;
+static uint16_t server_port = 43000;   // agreed server port
 
-
-/* Server discovery (Client -> Server Manager)*/
-
+/* Client -> Server Manager : Get Active Server */
 int discover_server(void) {
-    int sock = connect_to("192.168.0.19", 42069);
+    int sock = connect_to("192.168.0.131", 42069);
     if (sock < 0)
         return 0;
 
-    /* Ask server manager for active server */
-    send_line(sock, "GET_SERVER\n");
+    BigHeader hdr;
+    memset(&hdr, 0, sizeof(hdr));
 
-    char reply[128];
-    int n = recv_line(sock, reply, sizeof(reply));
+    hdr.version = BIG_VERSION_1;
+    hdr.type    = MSG_TYPE(RES_ACTIVATION, CRUD_READ, ACK_REQ);
+    hdr.status  = 0x00;
+    hdr.padding = 0x00;
+    hdr.length  = htonl(5);   // 4 bytes IP + 1 byte server ID
+
+    if (send(sock, &hdr, sizeof(hdr), 0) != sizeof(hdr)) {
+        close_conn(sock);
+        return 0;
+    }
+
+    uint8_t body[5] = {0};
+    send(sock, body, sizeof(body), 0);
+
+    BigHeader resp;
+    if (recv(sock, &resp, sizeof(resp), MSG_WAITALL) != sizeof(resp)) {
+        close_conn(sock);
+        return 0;
+    }
+
+    uint32_t len = ntohl(resp.length);
+    if (len != 5) {
+        close_conn(sock);
+        return 0;
+    }
+
+    uint8_t resp_body[5];
+    if (recv(sock, resp_body, len, MSG_WAITALL) != (int)len) {
+        close_conn(sock);
+        return 0;
+    }
+
     close_conn(sock);
 
-    if (n <= 0)
-        return 0;
+    struct in_addr ip;
+    memcpy(&ip, resp_body, 4);
+    server_id = resp_body[4];
 
-    /* Expected format: SERVER <ip> <port> */
-    if (sscanf(reply, "SERVER %63s %d", server_ip, &server_port) == 2)
-        return 1;
+    strncpy(server_ip, inet_ntoa(ip), sizeof(server_ip) - 1);
+    server_ip[sizeof(server_ip) - 1] = '\0';
 
-    return 0;
+    return 1;
 }
 
 const char *get_server_ip(void) {
@@ -40,49 +74,58 @@ int get_server_port(void) {
     return server_port;
 }
 
-/* Authentication with Server */
+/* Helper: send account message (create / login / logout) */
+static ServerResponse send_account_msg(
+        uint8_t crud,
+        const char *username,
+        const char *password,
+        uint8_t status_flag) {
 
-ServerResponse protocol_create_account(const char *username, const char *password) {
     int sock = connect_to(server_ip, server_port);
     if (sock < 0)
         return SERVER_NACK;
 
-    char msg[128];
-    snprintf(msg, sizeof(msg), "CREATE %s %s\n", username, password);
-    send_line(sock, msg);
+    BigHeader hdr;
+    memset(&hdr, 0, sizeof(hdr));
 
-    char reply[64];
-    recv_line(sock, reply, sizeof(reply));
+    hdr.version = BIG_VERSION_1;
+    hdr.type    = MSG_TYPE(RES_ACCOUNT, crud, ACK_REQ);
+    hdr.status  = 0x00;
+    hdr.padding = 0x00;
+    hdr.length  = htonl(34);
+
+    send(sock, &hdr, sizeof(hdr), 0);
+
+    uint8_t body[34];
+    memset(body, 0, sizeof(body));
+
+    strncpy((char *)body, username, 16);
+    strncpy((char *)body + 16, password, 16);
+    body[32] = server_id;     // client/server ID
+    body[33] = status_flag;   // 1 = online, 0 = offline
+
+    send(sock, body, sizeof(body), 0);
+
+    BigHeader resp;
+    recv(sock, &resp, sizeof(resp), MSG_WAITALL);
     close_conn(sock);
 
-    return (strncmp(reply, "OK", 2) == 0)
-           ? SERVER_ACK
-           : SERVER_NACK;
+    return (resp.type & 0x01) ? SERVER_ACK : SERVER_NACK;
 }
 
-ServerResponse protocol_login(const char *username, const char *password) {
-    int sock = connect_to(server_ip, server_port);
-    if (sock < 0)
-        return SERVER_NACK;
-
-    char msg[128];
-    snprintf(msg, sizeof(msg), "LOGIN %s %s\n", username, password);
-    send_line(sock, msg);
-
-    char reply[64];
-    recv_line(sock, reply, sizeof(reply));
-    close_conn(sock);
-
-    return (strncmp(reply, "OK", 2) == 0)
-           ? SERVER_ACK
-           : SERVER_NACK;
+/* Client -> Server : Create Account */
+ServerResponse protocol_create_account(const char *username,
+                                       const char *password) {
+    return send_account_msg(CRUD_CREATE, username, password, 0x01);
 }
 
+/* Client -> Server : Login */
+ServerResponse protocol_login(const char *username,
+                              const char *password) {
+    return send_account_msg(CRUD_UPDATE, username, password, 0x01);
+}
+
+/* Client -> Server : Logout */
 void protocol_logout(void) {
-    int sock = connect_to(server_ip, server_port);
-    if (sock < 0)
-        return;
-
-    send_line(sock, "LOGOUT\n");
-    close_conn(sock);
+    send_account_msg(CRUD_UPDATE, "", "", 0x00);
 }
