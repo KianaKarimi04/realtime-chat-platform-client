@@ -5,12 +5,19 @@
 #include <ncurses.h>
 #include "ui.h"
 #include "auth.h"
+#include "protocol.h"
 
 void show_menu(ClientState *state) {
     int ch;
 
     while (1) {
         clear();
+
+        /* Show connected server info */
+        printw("Connected Server: %s:%d (id=%u)\n\n",
+               get_server_ip(),
+               get_server_port(),
+               get_server_id());
 
         if (!state->logged_in) {
             printw("=== Client Menu ===\n");
