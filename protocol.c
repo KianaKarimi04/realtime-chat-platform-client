@@ -11,11 +11,11 @@
 /* Discovered server info */
 static char server_ip[64];
 static uint8_t server_id;
-static uint16_t server_port = 42096;   // agreed server port
+static uint16_t server_port = 42069;   // agreed server port
 
 /* Client -> Server Manager : Get Active Server */
 int discover_server(void) {
-    int sock = connect_to("192.168.0.50", 42069);
+    int sock = connect_to("192.168.0.131", 42069);
     if (sock < 0)
         return 0;
 
