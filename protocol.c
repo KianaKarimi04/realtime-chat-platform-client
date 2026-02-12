@@ -11,7 +11,7 @@
 /* Discovered server info */
 static char server_ip[64];
 static uint8_t server_id;
-static uint16_t server_port = 42068;   // agreed server port
+static uint16_t server_port = 42069;   // agreed server port
 
 /* Client -> Server Manager : Get Active Server */
 int discover_server(void) {
