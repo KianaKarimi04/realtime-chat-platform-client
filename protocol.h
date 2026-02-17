@@ -13,7 +13,7 @@ typedef enum {
     SERVER_NACK
 } ServerResponse;
 
-int discover_server(void);
+int discover_server(const char *manager_ip);
 const char *get_server_ip(void);
 int get_server_port(void);
 

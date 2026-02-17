@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <stdio.h>
 
 #include "protocol.h"
 #include "network.h"
@@ -14,11 +15,12 @@ static uint8_t server_id;
 static uint16_t server_port = 42069;   // agreed server port
 
 /* Client -> Server Manager : Get Active Server */
-int discover_server(void) {
-    int sock = connect_to("192.168.0.131", 42069);
-    if (sock < 0)
+int discover_server(const char *manager_ip) {
+    int sock = connect_to(manager_ip, 42069);
+    if (sock < 0) {
+        printw("pass")
         return 0;
-
+    }
     BigHeader hdr;
     memset(&hdr, 0, sizeof(hdr));
 
@@ -111,7 +113,27 @@ static ServerResponse send_account_msg(
     send(sock, body, sizeof(body), 0);
 
     BigHeader resp;
-    recv(sock, &resp, sizeof(resp), MSG_WAITALL);
+    ssize_t n = recv(sock, &resp, sizeof(resp), MSG_WAITALL);
+
+    if (n == 0) {
+        fprintf(stderr, "Server closed connection (no response)");
+        close(sock);
+        return -1;
+    }
+
+    if (n < 0) {
+        perror("recv failed");
+        close(sock);
+        return -1;
+    }
+
+    if (n != sizeof(resp)) {
+        fprintf(stderr, "Incomplete response: got %zd bytes, expected %zu\n",
+                n, sizeof(resp));
+        close(sock);
+        return -1;
+    }
+
     close_conn(sock);
 
     return (resp.type & 0x01) ? SERVER_ACK : SERVER_NACK;
