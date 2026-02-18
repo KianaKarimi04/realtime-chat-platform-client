@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <errno.h>
 
 #include "protocol.h"
 #include "network.h"
@@ -14,13 +15,30 @@ static char server_ip[64];
 static uint8_t server_id;
 static uint16_t server_port = 42069;   // agreed server port
 
-/* Client -> Server Manager : Get Active Server */
+/* Helper: send all bytes (TCP can do partial sends) */
+static int send_all(int sock, const void *buf, size_t len) {
+    const uint8_t *p = (const uint8_t *)buf;
+    size_t sent = 0;
+
+    while (sent < len) {
+        ssize_t n = send(sock, p + sent, len - sent, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return 0;
+        }
+        if (n == 0) return 0;
+        sent += (size_t)n;
+    }
+    return 1;
+}
+
+/* Discovered server info */
 int discover_server(const char *manager_ip) {
     int sock = connect_to(manager_ip, 42069);
     if (sock < 0) {
-        printw("pass")
         return 0;
     }
+
     BigHeader hdr;
     memset(&hdr, 0, sizeof(hdr));
 
@@ -30,16 +48,19 @@ int discover_server(const char *manager_ip) {
     hdr.padding = 0x00;
     hdr.length  = htonl(5);   // 4 bytes IP + 1 byte server ID
 
-    if (send(sock, &hdr, sizeof(hdr), 0) != sizeof(hdr)) {
+    if (!send_all(sock, &hdr, sizeof(hdr))) {
         close_conn(sock);
         return 0;
     }
 
     uint8_t body[5] = {0};
-    send(sock, body, sizeof(body), 0);
+    if (!send_all(sock, body, sizeof(body))) {
+        close_conn(sock);
+        return 0;
+    }
 
     BigHeader resp;
-    if (recv(sock, &resp, sizeof(resp), MSG_WAITALL) != sizeof(resp)) {
+    if (recv(sock, &resp, sizeof(resp), MSG_WAITALL) != (ssize_t)sizeof(resp)) {
         close_conn(sock);
         return 0;
     }
@@ -51,7 +72,7 @@ int discover_server(const char *manager_ip) {
     }
 
     uint8_t resp_body[5];
-    if (recv(sock, resp_body, len, MSG_WAITALL) != (int)len) {
+    if (recv(sock, resp_body, len, MSG_WAITALL) != (ssize_t)len) {
         close_conn(sock);
         return 0;
     }
@@ -88,8 +109,9 @@ static ServerResponse send_account_msg(
         uint8_t status_flag) {
 
     int sock = connect_to(server_ip, server_port);
-    if (sock < 0)
+    if (sock < 0) {
         return SERVER_NACK;
+    }
 
     BigHeader hdr;
     memset(&hdr, 0, sizeof(hdr));
@@ -100,49 +122,67 @@ static ServerResponse send_account_msg(
     hdr.padding = 0x00;
     hdr.length  = htonl(34);
 
-    send(sock, &hdr, sizeof(hdr), 0);
-
+    // Build body BEFORE sending (so we can debug and keep logic clear)
     uint8_t body[34];
     memset(body, 0, sizeof(body));
 
-    strncpy((char *)body, username, 16);
-    strncpy((char *)body + 16, password, 16);
+    // 0..15 username, 16..31 password
+    strncpy((char *)body, username ? username : "", 16);
+    strncpy((char *)body + 16, password ? password : "", 16);
     body[32] = server_id;     // client/server ID
     body[33] = status_flag;   // 1 = online, 0 = offline
 
-    send(sock, body, sizeof(body), 0);
+    // Send header once
+    if (!send_all(sock, &hdr, sizeof(hdr))) {
+        perror("send header failed");
+        close_conn(sock);
+        return SERVER_NACK;
+    }
 
+    // Send body once (THIS WAS MISSING IN YOUR CURRENT CODE)
+    if (!send_all(sock, body, sizeof(body))) {
+        perror("send body failed");
+        close_conn(sock);
+        return SERVER_NACK;
+    }
+
+    // Receive response header
     BigHeader resp;
     ssize_t n = recv(sock, &resp, sizeof(resp), MSG_WAITALL);
 
     if (n == 0) {
-        fprintf(stderr, "Server closed connection (no response)");
-        close(sock);
-        return -1;
+        fprintf(stderr, "Server closed connection (no response)\n");
+        close_conn(sock);
+        return SERVER_NACK;
     }
 
     if (n < 0) {
         perror("recv failed");
-        close(sock);
-        return -1;
+        close_conn(sock);
+        return SERVER_NACK;
     }
 
-    if (n != sizeof(resp)) {
+    if (n != (ssize_t)sizeof(resp)) {
         fprintf(stderr, "Incomplete response: got %zd bytes, expected %zu\n",
                 n, sizeof(resp));
-        close(sock);
-        return -1;
+        close_conn(sock);
+        return SERVER_NACK;
     }
+
+    printf("resp.version=%u resp.type=0x%02x resp.status=0x%02x resp.length=%u\n",
+           resp.version, resp.type, resp.status, ntohl(resp.length));
+    fflush(stdout);
 
     close_conn(sock);
 
-    return (resp.type & 0x01) ? SERVER_ACK : SERVER_NACK;
+    // Treat status==0x00 as success (matches your request status usage)
+    return (resp.status == 0x00) ? SERVER_ACK : SERVER_NACK;
 }
 
 /* Client -> Server : Create Account */
 ServerResponse protocol_create_account(const char *username,
                                        const char *password) {
-    return send_account_msg(CRUD_CREATE, username, password, 0x01);
+    return send_account_msg(CRUD_CREATE, username, password, 0x00);
 }
 
 /* Client -> Server : Login */
@@ -153,5 +193,5 @@ ServerResponse protocol_login(const char *username,
 
 /* Client -> Server : Logout */
 void protocol_logout(void) {
-    send_account_msg(CRUD_UPDATE, "", "", 0x00);
+    (void)send_account_msg(CRUD_UPDATE, "", "", 0x00);
 }
