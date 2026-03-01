@@ -1,24 +1,40 @@
-# Real-Time Chat Platform (C)
+# Distributed Chat System Client (C)
 
-A collaborative client-server chat application built in C using TCP sockets.
+A C-based TCP client built as part of a distributed multi-server chat system with server-manager coordination and user authentication.
 
 ---
 
 ## Overview
 
-This project implements a real-time chat client and server in C using socket programming.  
-Multiple clients can connect to the server and send messages that are visible to all connected participants.
+This project implements the client component of a distributed chat architecture consisting of:
 
-The system demonstrates low-level networking concepts, client-server communication over TCP/IP, and basic protocol handling.
+- A Server Manager
+- Multiple backend servers
+- Multiple TCP clients
+
+The client connects to a central Server Manager, which coordinates communication with backend servers. Users can create accounts, log in, log out, and interact with the distributed system through structured message protocols.
+
+The system demonstrates distributed architecture design, TCP socket communication, authentication handling, and multi-server coordination.
 
 ---
 
-## Features
+## Current Features
 
-- Client-server architecture using TCP sockets  
-- Real-time message broadcast to all connected clients  
-- Basic UI interaction in the terminal  
-- Concurrent client handling using process/thread management
+- TCP client-server communication using POSIX sockets
+- Connection to Server Manager for routing
+- Account creation and authentication (login/logout)
+- Structured message protocol between client and servers
+- Terminal-based interface
+
+---
+
+## In Progress
+
+- Default shared chatroom implementation
+- Real-time message broadcasting across connected clients
+- Chat session management improvements
+
+Note: Previously sent messages are not persisted yet (no message history storage).
 
 ---
 
@@ -26,51 +42,54 @@ The system demonstrates low-level networking concepts, client-server communicati
 
 - C (POSIX socket API)
 - TCP/IP networking
-- Terminal-based interaction
 - IPv4 socket programming
-- Basic application-level messaging protocol
+- Custom application-level messaging protocol
+- Distributed system architecture concepts
 
 ---
 
 ## Running Locally
 
-1. Compile server and client:
+1. Compile client:
 
-   gcc server.c -o server  
    gcc client.c -o client  
 
-2. Start the server:
+2. Run client:
 
-   ./server  
-
-3. Connect each client:
-
-   ./client <server_ip> <port>
+   ./client <server_manager_ip> <port>
 
 Example:
 
-   ./server  
    ./client 127.0.0.1 9000
+
+(Note: Requires Server Manager and backend servers running separately.)
 
 ---
 
 ## My Contributions
 
-This project was completed collaboratively with a team member. My work included:
+This project was developed collaboratively. My responsibilities included:
 
-- Implementing the client networking logic  
-- Designing communication protocol structure  
-- Debugging concurrent message handling  
-- Organizing modular code with header files
+- Implementing client-side networking logic
+- Designing message protocol structures
+- Handling authentication workflows (account creation/login/logout)
+- Debugging routing through Server Manager
+- Organizing modular client code
 
 ---
 
 ## What I Learned
 
-This project strengthened my understanding of socket programming, TCP/IP communication, and building client-server systems in C.
+This project strengthened my understanding of:
+
+- Distributed system design
+- TCP socket lifecycle management
+- Client-server coordination
+- Authentication workflows
+- Debugging multi-component networked systems
 
 ---
 
 ## Project Status
 
-This project is actively being improved. Additional features and refinements are currently in development.
+This project is under active development with additional features being implemented to expand chat functionality.
