@@ -49,6 +49,7 @@ void login(ClientState *state) {
     if (res == SERVER_ACK) {
         state->logged_in = 1;
         strcpy(state->username, username);
+        strcpy(state->password, password);
         printw("\nServer: Login successful.\n");
     } else {
         printw("\nServer: Login failed.\n");
@@ -62,4 +63,5 @@ void logout(ClientState *state) {
     protocol_logout();
     state->logged_in = 0;
     state->username[0] = '\0';
+    state->password[0] = '\0';
 }

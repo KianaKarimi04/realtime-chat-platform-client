@@ -5,6 +5,7 @@
 #include <ncurses.h>
 #include "ui.h"
 #include "auth.h"
+#include "chat.h"
 #include "protocol.h"
 
 void show_menu(ClientState *state) {
@@ -30,13 +31,15 @@ void show_menu(ClientState *state) {
             else if (ch == '2') login(state);
             else if (ch == '3') break;
         } else {
-            printw("Welcome, %s\n", state->username);
-            printw("1. Logout\n");
-            printw("2. Exit\n");
+            printw("Welcome, %s\n\n", state->username);
+            printw("1. Channels\n");
+            printw("2. Logout\n");
+            printw("3. Exit\n");
             ch = getch();
 
-            if (ch == '1') logout(state);
-            else if (ch == '2') break;
+            if (ch == '1') show_channel_list(state);
+            else if (ch == '2') logout(state);
+            else if (ch == '3') break;
         }
     }
 }

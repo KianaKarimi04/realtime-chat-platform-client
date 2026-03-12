@@ -6,8 +6,9 @@
 #define AUTH_H
 
 typedef struct {
-    int logged_in;
+    int  logged_in;
     char username[50];
+    char password[50];   /* needed for authenticated channel/message requests */
 } ClientState;
 
 void create_account(ClientState *state);

@@ -8,7 +8,7 @@
 #include "protocol.h"
 
 int main(int argc, char *argv[]) {
-    ClientState state = {0, ""};
+    ClientState state = {0, "", ""};
 
     initscr();
     cbreak();
