@@ -1,12 +1,12 @@
 //
-// chat.c — Channel list + chat room (poll-based message receive)
+// chat.c — Channel list + chat room (single-threaded, no pthreads)
 //
 
 #include <ncurses.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <pthread.h>
+#include <time.h>
 
 #include "chat.h"
 #include "protocol.h"
@@ -15,27 +15,19 @@
 #define MAX_DISPLAY_MSGS 100
 
 typedef struct {
-    ChatMessage      msgs[MAX_DISPLAY_MSGS];
-    int              count;
-    pthread_mutex_t  lock;
-    volatile int     running;
+    ChatMessage msgs[MAX_DISPLAY_MSGS];
+    int         count;
+} MsgBuffer;
 
-    /* Credentials for polling */
-    char username[16];
-    char password[16];
-    uint8_t channel_id;
-} ChatRoom;
-
-/* ── Username cache (so we don't User-Read every message) ─────────── */
+/* ── Username cache ───────────────────────────────────────────────── */
 #define MAX_USERS 64
 static char user_cache[MAX_USERS][16];
 static int  user_cache_valid[MAX_USERS];
 
 static const char *resolve_username(const char *my_user, const char *my_pass,
                                     uint8_t user_id) {
-    if (user_id < MAX_USERS && user_cache_valid[user_id]) {
+    if (user_id < MAX_USERS && user_cache_valid[user_id])
         return user_cache[user_id];
-    }
 
     char name[16] = {0};
     if (protocol_get_username(my_user, my_pass, user_id, name)) {
@@ -45,100 +37,82 @@ static const char *resolve_username(const char *my_user, const char *my_pass,
         }
         return user_cache[user_id];
     }
-
     return "???";
 }
 
-/* ── Background polling thread ────────────────────────────────────── */
-static void *poll_thread(void *arg) {
-    ChatRoom *room = (ChatRoom *)arg;
-
-    while (room->running) {
-        ChatMessage msg;
-
-        if (protocol_read_messages(room->username, room->password,
-                                   room->channel_id, &msg)) {
-            /* Resolve sender username from user id */
-            const char *sender = resolve_username(
-                room->username, room->password, msg.sender_id);
-            strncpy(msg.sender, sender, 15);
-            msg.sender[15] = '\0';
-
-            pthread_mutex_lock(&room->lock);
-            if (room->count < MAX_DISPLAY_MSGS) {
-                room->msgs[room->count++] = msg;
-            } else {
-                memmove(&room->msgs[0], &room->msgs[1],
-                        (MAX_DISPLAY_MSGS - 1) * sizeof(ChatMessage));
-                room->msgs[MAX_DISPLAY_MSGS - 1] = msg;
-            }
-            pthread_mutex_unlock(&room->lock);
-        }
-
-        /* Poll interval — adjust as needed */
-        usleep(500000);   /* 500 ms */
+/* ── Add message to buffer ────────────────────────────────────────── */
+static void buf_add(MsgBuffer *buf, ChatMessage *msg) {
+    if (buf->count < MAX_DISPLAY_MSGS) {
+        buf->msgs[buf->count++] = *msg;
+    } else {
+        memmove(&buf->msgs[0], &buf->msgs[1],
+                (MAX_DISPLAY_MSGS - 1) * sizeof(ChatMessage));
+        buf->msgs[MAX_DISPLAY_MSGS - 1] = *msg;
     }
-    return NULL;
 }
 
 /* ── Draw messages ────────────────────────────────────────────────── */
-static void draw_messages(ChatRoom *room, int max_lines, int cols) {
-    pthread_mutex_lock(&room->lock);
-
+static void draw_messages(MsgBuffer *buf, int max_lines, int cols) {
     int start = 0;
-    if (room->count > max_lines)
-        start = room->count - max_lines;
+    if (buf->count > max_lines)
+        start = buf->count - max_lines;
 
-    for (int i = start; i < room->count; i++) {
+    for (int i = start; i < buf->count; i++) {
         int row = 2 + (i - start);
         mvprintw(row, 0, "[%s]: %.*s",
-                 room->msgs[i].sender,
-                 cols - 20,   /* truncate to screen width */
-                 room->msgs[i].text);
+                 buf->msgs[i].sender,
+                 cols - 20,
+                 buf->msgs[i].text);
         clrtoeol();
     }
-
-    pthread_mutex_unlock(&room->lock);
 }
 
-/* ── Chat room UI ─────────────────────────────────────────────────── */
+/* ── Chat room UI (single-threaded) ──────────────────────────────── */
 static void enter_chat(ClientState *state, uint8_t channel_id,
                        const char *channel_name) {
-    /* Clear username cache for this session */
     memset(user_cache_valid, 0, sizeof(user_cache_valid));
 
-    ChatRoom room;
-    memset(&room, 0, sizeof(room));
-    pthread_mutex_init(&room.lock, NULL);
-    room.running = 1;
-    room.channel_id = channel_id;
-    strncpy(room.username, state->username, 15);
-    strncpy(room.password, state->password, 15);
-
-    /* Start polling thread */
-    pthread_t tid;
-    pthread_create(&tid, NULL, poll_thread, &room);
-
-    /* ncurses: non-blocking input */
-    nodelay(stdscr, TRUE);
-    keypad(stdscr, TRUE);
+    MsgBuffer buf;
+    memset(&buf, 0, sizeof(buf));
 
     char input[512];
     int input_len = 0;
     memset(input, 0, sizeof(input));
+
+    /* Use halfdelay mode: getch() waits up to N tenths of a second */
+    halfdelay(1);    /* wait up to 0.1 seconds for input */
+    keypad(stdscr, TRUE);
+
+    long last_poll = 0;
 
     int running = 1;
     while (running) {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
 
-        clear();
+        /* Poll server for new messages every ~1 second */
+        long now = (long)time(NULL);
+        if (now != last_poll) {
+            last_poll = now;
+            ChatMessage msg;
+            if (protocol_read_messages(state->username, state->password,
+                                       channel_id, &msg)) {
+                const char *sender = resolve_username(
+                    state->username, state->password, msg.sender_id);
+                strncpy(msg.sender, sender, 15);
+                msg.sender[15] = '\0';
+                buf_add(&buf, &msg);
+            }
+        }
+
+        /* Draw screen */
+        erase();
         mvprintw(0, 0, "=== #%s === (ESC to leave)", channel_name);
         mvhline(1, 0, '-', cols);
 
         int msg_area = rows - 4;
         if (msg_area < 1) msg_area = 1;
-        draw_messages(&room, msg_area, cols);
+        draw_messages(&buf, msg_area, cols);
 
         mvhline(rows - 2, 0, '-', cols);
         mvprintw(rows - 1, 0, "> %s", input);
@@ -146,16 +120,22 @@ static void enter_chat(ClientState *state, uint8_t channel_id,
         move(rows - 1, 2 + input_len);
         refresh();
 
+        /* Read input (halfdelay: returns ERR after 0.1s if no key) */
         int ch = getch();
-        if (ch == ERR) {
-            usleep(50000);   /* 50 ms — avoid busy-wait */
+        if (ch == ERR)
             continue;
-        }
 
         if (ch == 27) {   /* ESC */
             running = 0;
         } else if (ch == '\n' || ch == '\r') {
             if (input_len > 0) {
+                /* Add our own message to display immediately */
+                ChatMessage my_msg;
+                memset(&my_msg, 0, sizeof(my_msg));
+                strncpy(my_msg.sender, state->username, 15);
+                strncpy(my_msg.text, input, 511);
+                buf_add(&buf, &my_msg);
+
                 protocol_send_message(state->username, state->password,
                                       channel_id, input);
                 memset(input, 0, sizeof(input));
@@ -170,12 +150,10 @@ static void enter_chat(ClientState *state, uint8_t channel_id,
         }
     }
 
-    /* Cleanup */
-    room.running = 0;
-    pthread_join(tid, NULL);
-    pthread_mutex_destroy(&room.lock);
-
-    nodelay(stdscr, FALSE);
+    /* Restore normal input mode */
+    nocbreak();
+    cbreak();
+    noecho();
 }
 
 /* ── Channel list UI ──────────────────────────────────────────────── */
@@ -196,7 +174,6 @@ void show_channel_list(ClientState *state) {
             printw("No channels available.\n");
         } else {
             for (int i = 0; i < count; i++) {
-                /* Get channel name via Channel Read */
                 char cname[16] = {0};
                 uint8_t users[64];
                 int nusers = protocol_get_channel_info(
@@ -220,7 +197,6 @@ void show_channel_list(ClientState *state) {
         } else if (ch >= '1' && ch <= '9') {
             int idx = ch - '1';
             if (idx < count) {
-                /* Get the channel name for display */
                 char cname[16] = {0};
                 uint8_t users[64];
                 protocol_get_channel_info(state->username, state->password,

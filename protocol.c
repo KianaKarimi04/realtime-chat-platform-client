@@ -398,24 +398,8 @@ ServerResponse protocol_send_message(const char *username, const char *password,
     }
     free(body);
 
-    /* No explicit ACK defined in spec for Message Create,
-     * but we try to read one anyway — server may send one. */
-    BigHeader resp;
-    if (!recv_all(sock, &resp, sizeof(resp))) {
-        close_conn(sock);
-        /* Treat no-response as success since spec has no Create ACK */
-        return SERVER_ACK;
-    }
-
-    /* Drain response body */
-    uint32_t rlen = ntohl(resp.length);
-    if (rlen > 0 && rlen < 65536) {
-        uint8_t *discard = (uint8_t *)malloc(rlen);
-        if (discard) { recv_all(sock, discard, rlen); free(discard); }
-    }
-
     close_conn(sock);
-    return (resp.status == STATUS_OK) ? SERVER_ACK : SERVER_NACK;
+    return SERVER_ACK;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -485,6 +469,13 @@ int protocol_read_messages(const char *username, const char *password,
 
     /* Message length at offset 40, 2 bytes big-endian */
     msg->text_len = (uint16_t)((rbuf[40] << 8) | rbuf[41]);
+
+    /* If message length is 0, server has no new messages */
+    if (msg->text_len == 0) {
+        free(rbuf);
+        close_conn(sock);
+        return 0;
+    }
 
     msg->channel_id = rbuf[42];
     msg->sender_id  = rbuf[43];
